@@ -1,7 +1,7 @@
 /*
   xsns_01_counter.ino - Counter sensors (water meters, electricity meters etc.) sensor support for Sonoff-Tasmota
 
-  Copyright (C) 2019  Maarten Damen and Theo Arends
+  Copyright (C) 2018  Maarten Damen and Theo Arends
 
   This program is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
@@ -21,64 +21,63 @@
  * Counter sensors (water meters, electricity meters etc.)
 \*********************************************************************************************/
 
-#define XSNS_01             1
+unsigned long last_counter_timer[MAX_COUNTERS]; // Last counter time in milli seconds
 
-unsigned long last_counter_timer[MAX_COUNTERS]; // Last counter time in micro seconds
-
-void CounterUpdate(uint8_t index)
+void CounterUpdate(byte index)
 {
-  unsigned long counter_debounce_time = micros() - last_counter_timer[index -1];
-  if (counter_debounce_time > Settings.pulse_counter_debounce * 1000) {
-    last_counter_timer[index -1] = micros();
+  unsigned long counter_debounce_time = millis() - last_counter_timer[index -1];
+  if (counter_debounce_time > Settings.pulse_counter_debounce) {
+    last_counter_timer[index -1] = millis();
     if (bitRead(Settings.pulse_counter_type, index -1)) {
       RtcSettings.pulse_counter[index -1] = counter_debounce_time;
     } else {
       RtcSettings.pulse_counter[index -1]++;
     }
 
-//    AddLog_P2(LOG_LEVEL_DEBUG, PSTR("CNTR: Interrupt %d"), index);
+//    snprintf_P(log_data, sizeof(log_data), PSTR("CNTR: Interrupt %d"), index);
+//    AddLog(LOG_LEVEL_DEBUG);
   }
 }
 
-void CounterUpdate1(void)
+void CounterUpdate1()
 {
   CounterUpdate(1);
 }
 
-void CounterUpdate2(void)
+void CounterUpdate2()
 {
   CounterUpdate(2);
 }
 
-void CounterUpdate3(void)
+void CounterUpdate3()
 {
   CounterUpdate(3);
 }
 
-void CounterUpdate4(void)
+void CounterUpdate4()
 {
   CounterUpdate(4);
 }
 
 /********************************************************************************************/
 
-void CounterSaveState(void)
+void CounterSaveState()
 {
-  for (uint8_t i = 0; i < MAX_COUNTERS; i++) {
+  for (byte i = 0; i < MAX_COUNTERS; i++) {
     if (pin[GPIO_CNTR1 +i] < 99) {
       Settings.pulse_counter[i] = RtcSettings.pulse_counter[i];
     }
   }
 }
 
-void CounterInit(void)
+void CounterInit()
 {
   typedef void (*function) () ;
   function counter_callbacks[] = { CounterUpdate1, CounterUpdate2, CounterUpdate3, CounterUpdate4 };
 
-  for (uint8_t i = 0; i < MAX_COUNTERS; i++) {
+  for (byte i = 0; i < MAX_COUNTERS; i++) {
     if (pin[GPIO_CNTR1 +i] < 99) {
-      pinMode(pin[GPIO_CNTR1 +i], bitRead(counter_no_pullup, i) ? INPUT : INPUT_PULLUP);
+      pinMode(pin[GPIO_CNTR1 +i], INPUT_PULLUP);
       attachInterrupt(pin[GPIO_CNTR1 +i], counter_callbacks[i], FALLING);
     }
   }
@@ -89,32 +88,24 @@ const char HTTP_SNS_COUNTER[] PROGMEM =
   "%s{s}" D_COUNTER "%d{m}%s%s{e}";  // {s} = <tr><th>, {m} = </th><td>, {e} = </td></tr>
 #endif  // USE_WEBSERVER
 
-void CounterShow(bool json)
+void CounterShow(boolean json)
 {
-  char stemp[10];
+  char counter[16];
 
-  uint8_t dsxflg = 0;
-  uint8_t header = 0;
-  for (uint8_t i = 0; i < MAX_COUNTERS; i++) {
+  byte dsxflg = 0;
+  for (byte i = 0; i < MAX_COUNTERS; i++) {
     if (pin[GPIO_CNTR1 +i] < 99) {
-      char counter[33];
       if (bitRead(Settings.pulse_counter_type, i)) {
-        dtostrfd((double)RtcSettings.pulse_counter[i] / 1000000, 6, counter);
+        dtostrfd((double)RtcSettings.pulse_counter[i] / 1000, 3, counter);
       } else {
         dsxflg++;
-        snprintf_P(counter, sizeof(counter), PSTR("%lu"), RtcSettings.pulse_counter[i]);
+        dtostrfd(RtcSettings.pulse_counter[i], 0, counter);
       }
 
       if (json) {
-        if (!header) {
-          snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s,\"COUNTER\":{"), mqtt_data);
-          stemp[0] = '\0';
-        }
-        header++;
-        snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s%s\"C%d\":%s"), mqtt_data, stemp, i +1, counter);
-        strlcpy(stemp, ",", sizeof(stemp));
+        snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s,\"" D_JSON_COUNTER "%d\":%s"), mqtt_data, i +1, counter);
 #ifdef USE_DOMOTICZ
-        if ((0 == tele_period) && (1 == dsxflg)) {
+        if (1 == dsxflg) {
           DomoticzSensor(DZ_COUNT, RtcSettings.pulse_counter[i]);
           dsxflg++;
         }
@@ -125,14 +116,6 @@ void CounterShow(bool json)
 #endif  // USE_WEBSERVER
       }
     }
-    if (bitRead(Settings.pulse_counter_type, i)) {
-      RtcSettings.pulse_counter[i] = 0xFFFFFFFF;  // Set Timer to max in case of no more interrupts due to stall of measured device
-    }
-  }
-  if (json) {
-    if (header) {
-      snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s}"), mqtt_data);
-    }
   }
 }
 
@@ -140,9 +123,11 @@ void CounterShow(bool json)
  * Interface
 \*********************************************************************************************/
 
-bool Xsns01(uint8_t function)
+#define XSNS_01
+
+boolean Xsns01(byte function)
 {
-  bool result = false;
+  boolean result = false;
 
   switch (function) {
     case FUNC_INIT:

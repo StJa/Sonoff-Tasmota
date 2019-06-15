@@ -1,7 +1,7 @@
 /*
   xsns_12_ads1115.ino - ADS1x15 A/D Converter support for Sonoff-Tasmota
 
-  Copyright (C) 2019  Stefan Bode and Theo Arends
+  Copyright (C) 2018  Stefan Bode and Theo Arends
 
   This program is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
@@ -40,8 +40,6 @@
  * ads.setGain(GAIN_SIXTEEN);    // 16x gain  +/- 0.256V  1 bit = 0.125mV  0.0078125mV
 \*********************************************************************************************/
 
-#define XSNS_12             12
-
 #include <ADS1115.h>
 
 ADS1115 adc0;
@@ -55,7 +53,7 @@ uint8_t ads1115_addresses[] = {
   ADS1115_ADDRESS_ADDR_SCL   // address pin tied to SCL pin
 };
 
-int16_t Ads1115GetConversion(uint8_t channel)
+int16_t Ads1115GetConversion(byte channel)
 {
   switch (channel) {
     case 0:
@@ -75,13 +73,13 @@ int16_t Ads1115GetConversion(uint8_t channel)
 
 /********************************************************************************************/
 
-void Ads1115Detect(void)
+void Ads1115Detect()
 {
   if (ads1115_type) {
     return;
   }
 
-  for (uint8_t i = 0; i < sizeof(ads1115_addresses); i++) {
+  for (byte i = 0; i < sizeof(ads1115_addresses); i++) {
     ads1115_address = ads1115_addresses[i];
     ADS1115 adc0(ads1115_address);
     if (adc0.testConnection()) {
@@ -90,19 +88,20 @@ void Ads1115Detect(void)
       adc0.setRate(ADS1115_RATE_860);
       adc0.setMode(ADS1115_MODE_CONTINUOUS);
       ads1115_type = 1;
-      AddLog_P2(LOG_LEVEL_DEBUG, S_LOG_I2C_FOUND_AT, "ADS1115", ads1115_address);
+      snprintf_P(log_data, sizeof(log_data), S_LOG_I2C_FOUND_AT, "ADS1115", ads1115_address);
+      AddLog(LOG_LEVEL_DEBUG);
       break;
     }
   }
 }
 
-void Ads1115Show(bool json)
+void Ads1115Show(boolean json)
 {
   if (ads1115_type) {
     char stemp[10];
 
-    uint8_t dsxflg = 0;
-    for (uint8_t i = 0; i < 4; i++) {
+    byte dsxflg = 0;
+    for (byte i = 0; i < 4; i++) {
       int16_t adc_value = Ads1115GetConversion(i);
 
       if (json) {
@@ -111,8 +110,8 @@ void Ads1115Show(bool json)
           stemp[0] = '\0';
         }
         dsxflg++;
-        snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s%s\"A%d\":%d"), mqtt_data, stemp, i, adc_value);
-        strlcpy(stemp, ",", sizeof(stemp));
+        snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s%s\"" D_JSON_ANALOG_INPUT "%d\":%d"), mqtt_data, stemp, i, adc_value);
+        strcpy(stemp, ",");
 #ifdef USE_WEBSERVER
       } else {
         snprintf_P(mqtt_data, sizeof(mqtt_data), HTTP_SNS_ANALOG, mqtt_data, "ADS1115", i, adc_value);
@@ -131,9 +130,11 @@ void Ads1115Show(bool json)
  * Interface
 \*********************************************************************************************/
 
-bool Xsns12(uint8_t function)
+#define XSNS_12
+
+boolean Xsns12(byte function)
 {
-  bool result = false;
+  boolean result = false;
 
   if (i2c_flg) {
     switch (function) {

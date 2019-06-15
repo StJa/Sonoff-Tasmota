@@ -1,7 +1,7 @@
 /*
   xsns_16_tsl2561.ino - TSL2561 light sensor support for Sonoff-Tasmota
 
-  Copyright (C) 2019  Theo Arends and Joachim Banzhaf
+  Copyright (C) 2018  Theo Arends
 
   This program is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
@@ -22,94 +22,58 @@
 /*********************************************************************************************\
  * TSL2561 - Light Intensity
  *
- * Using library https://github.com/joba-1/Joba_Tsl2561
- *
  * I2C Addresses: 0x29 (low), 0x39 (float) or 0x49 (high)
+ *
+ * Using library https://github.com/adafruit/TSL2561-Arduino-Library
 \*********************************************************************************************/
 
-#define XSNS_16             16
+#include <TSL2561.h>
 
-#include <Tsl2561Util.h>
-
-Tsl2561 Tsl(Wire);
-
+uint8_t tsl2561_address;
+uint8_t tsl2561_addresses[] = { TSL2561_ADDR_LOW, TSL2561_ADDR_FLOAT, TSL2561_ADDR_HIGH };
 uint8_t tsl2561_type = 0;
-uint8_t tsl2561_valid = 0;
-uint32_t tsl2561_milliLux = 0;
-char tsl2561_types[] = "TSL2561";
 
-bool Tsl2561Read(void)
+//TSL2561 tsl(TSL2561_ADDR_FLOAT);
+TSL2561 *tsl;
+
+void Tsl2561Detect()
 {
-  if (tsl2561_valid) { tsl2561_valid--; }
+  if (tsl2561_type) {
+    return;
+  }
 
-  uint8_t id;
-  bool gain;
-  Tsl2561::exposure_t exposure;
-  uint16_t scaledFull, scaledIr;
-  uint32_t full, ir;
-
-    if (Tsl.on()) {
-      if (Tsl.id(id)
-        && Tsl2561Util::autoGain(Tsl, gain, exposure, scaledFull, scaledIr)
-        && Tsl2561Util::normalizedLuminosity(gain, exposure, full = scaledFull, ir = scaledIr)
-        && Tsl2561Util::milliLux(full, ir, tsl2561_milliLux, Tsl2561::packageCS(id))) {
-      } else{
-        tsl2561_milliLux = 0;
-      }
-    }
-  tsl2561_valid = SENSOR_MAX_MISS;
-  return true;
-}
-
-void Tsl2561Detect(void)
-{
-  if (tsl2561_type) { return; }
-  uint8_t id;
-
-  if (I2cDevice(0x29) || I2cDevice(0x39) || I2cDevice(0x49)) {
-    Tsl.begin();
-    if (!Tsl.id(id)) return;
-    if (Tsl.on()) {
+  for (byte i = 0; i < sizeof(tsl2561_addresses); i++) {
+    tsl2561_address = tsl2561_addresses[i];
+    tsl = new TSL2561(tsl2561_address);
+    if (tsl->begin()) {
+      tsl->setGain(TSL2561_GAIN_16X);
+      tsl->setTiming(TSL2561_INTEGRATIONTIME_101MS);
       tsl2561_type = 1;
-      AddLog_P2(LOG_LEVEL_DEBUG, S_LOG_I2C_FOUND_AT, tsl2561_types, Tsl.address(), id);
-    }
-  }
-}
-
-void Tsl2561EverySecond(void)
-{
-  if (90 == (uptime %100)) {
-    // 1mS
-    Tsl2561Detect();
-  }
-  else if (!(uptime %2)) {  // Update every 2 seconds
-    // ?mS - 4Sec
-    if (tsl2561_type) {
-      if (!Tsl2561Read()) {
-        AddLogMissed(tsl2561_types, tsl2561_valid);
-               if (!tsl2561_valid) { tsl2561_type = 0; }
-      }
+      snprintf_P(log_data, sizeof(log_data), S_LOG_I2C_FOUND_AT, "TSL2561", tsl2561_address);
+      AddLog(LOG_LEVEL_DEBUG);
+      break;
     }
   }
 }
 
 #ifdef USE_WEBSERVER
 const char HTTP_SNS_TSL2561[] PROGMEM =
-  "%s{s}TSL2561 " D_ILLUMINANCE "{m}%u.%03u " D_UNIT_LUX "{e}";  // {s} = <tr><th>, {m} = </th><td>, {e} = </td></tr>
+  "%s{s}TSL2561 " D_ILLUMINANCE "{m}%d " D_UNIT_LUX "{e}";  // {s} = <tr><th>, {m} = </th><td>, {e} = </td></tr>
 #endif  // USE_WEBSERVER
 
-void Tsl2561Show(bool json)
+void Tsl2561Show(boolean json)
 {
-  if (tsl2561_valid) {
+  if (tsl2561_type) {
+    uint16_t illuminance = tsl->getLuminosity(TSL2561_VISIBLE);
+
     if (json) {
-      snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s,\"TSL2561\":{\"" D_JSON_ILLUMINANCE "\":%u.%03u}"),
-        mqtt_data, tsl2561_milliLux / 1000, tsl2561_milliLux % 1000);
+      snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s,\"TSL2561\":{\"" D_JSON_ILLUMINANCE "\":%d}"), mqtt_data, illuminance);
 #ifdef USE_DOMOTICZ
-      if (0 == tele_period) { DomoticzSensor(DZ_ILLUMINANCE, (tsl2561_milliLux + 500) / 1000); }
+      DomoticzSensor(DZ_ILLUMINANCE, illuminance);
 #endif  // USE_DOMOTICZ
 #ifdef USE_WEBSERVER
     } else {
-      snprintf_P(mqtt_data, sizeof(mqtt_data), HTTP_SNS_TSL2561, mqtt_data, tsl2561_milliLux / 1000, tsl2561_milliLux % 1000);
+      snprintf_P(mqtt_data, sizeof(mqtt_data), HTTP_SNS_TSL2561, mqtt_data, illuminance);
 #endif  // USE_WEBSERVER
     }
   }
@@ -119,17 +83,16 @@ void Tsl2561Show(bool json)
  * Interface
 \*********************************************************************************************/
 
-bool Xsns16(uint8_t function)
+#define XSNS_16
+
+boolean Xsns16(byte function)
 {
-  bool result = false;
+  boolean result = false;
 
   if (i2c_flg) {
     switch (function) {
-      case FUNC_INIT:
+      case FUNC_PREP_BEFORE_TELEPERIOD:
         Tsl2561Detect();
-        break;
-      case FUNC_EVERY_SECOND:
-        Tsl2561EverySecond();
         break;
       case FUNC_JSON_APPEND:
         Tsl2561Show(1);

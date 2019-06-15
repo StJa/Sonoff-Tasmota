@@ -1,7 +1,7 @@
 /*
   xsns_04_snfsc.ino - sonoff SC support for Sonoff-Tasmota
 
-  Copyright (C) 2019  Theo Arends
+  Copyright (C) 2018  Theo Arends
 
   This program is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
@@ -53,18 +53,17 @@
 
 \*********************************************************************************************/
 
-#define XSNS_04             4
-
 uint16_t sc_value[5] = { 0 };
 
 void SonoffScSend(const char *data)
 {
   Serial.write(data);
   Serial.write('\x1B');
-  AddLog_P2(LOG_LEVEL_DEBUG, PSTR(D_LOG_SERIAL D_TRANSMIT " %s"), data);
+  snprintf_P(log_data, sizeof(log_data), PSTR(D_LOG_SERIAL D_TRANSMIT " %s"), data);
+  AddLog(LOG_LEVEL_DEBUG);
 }
 
-void SonoffScInit(void)
+void SonoffScInit()
 {
 //  SonoffScSend("AT+DEVCONFIG=\"uploadFreq\":1800");
   SonoffScSend("AT+START");
@@ -77,7 +76,8 @@ void SonoffScSerialInput(char *rcvstat)
   char *str;
   uint16_t value[5] = { 0 };
 
-  AddLog_P2(LOG_LEVEL_DEBUG, PSTR(D_LOG_SERIAL D_RECEIVED " %s"), rcvstat);
+  snprintf_P(log_data, sizeof(log_data), PSTR(D_LOG_SERIAL D_RECEIVED " %s"), rcvstat);
+  AddLog(LOG_LEVEL_DEBUG);
 
   if (!strncasecmp_P(rcvstat, PSTR("AT+UPDATE="), 10)) {
     int8_t i = -1;
@@ -85,7 +85,7 @@ void SonoffScSerialInput(char *rcvstat)
       value[i++] = atoi(str);
     }
     if (value[0] > 0) {
-      for (uint8_t i = 0; i < 5; i++) {
+      for (byte i = 0; i < 5; i++) {
         sc_value[i] = value[i];
       }
       sc_value[2] = (11 - sc_value[2]) * 10;  // Invert light level
@@ -108,36 +108,24 @@ const char HTTP_SNS_SCPLUS[] PROGMEM =
   "%s{s}" D_LIGHT "{m}%d%%{e}{s}" D_NOISE "{m}%d%%{e}{s}" D_AIR_QUALITY "{m}%d%%{e}";  // {s} = <tr><th>, {m} = </th><td>, {e} = </td></tr>
 #endif  // USE_WEBSERVER
 
-void SonoffScShow(bool json)
+void SonoffScShow(boolean json)
 {
   if (sc_value[0] > 0) {
+    char temperature[10];
+    char humidity[10];
+
     float t = ConvertTemp(sc_value[1]);
     float h = sc_value[0];
-
-    char temperature[33];
     dtostrfd(t, Settings.flag2.temperature_resolution, temperature);
-    char humidity[33];
     dtostrfd(h, Settings.flag2.humidity_resolution, humidity);
 
     if (json) {
-      snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s,\"SonoffSC\":{\"" D_JSON_TEMPERATURE "\":%s,\"" D_JSON_HUMIDITY "\":%s,\"" D_JSON_LIGHT "\":%d,\"" D_JSON_NOISE "\":%d,\"" D_JSON_AIRQUALITY "\":%d}"),
+      snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s,\"" D_JSON_TEMPERATURE "\":%s,\"" D_JSON_HUMIDITY "\":%s,\"" D_JSON_LIGHT "\":%d,\"" D_JSON_NOISE "\":%d,\"" D_JSON_AIRQUALITY "\":%d"),
         mqtt_data, temperature, humidity, sc_value[2], sc_value[3], sc_value[4]);
 #ifdef USE_DOMOTICZ
-      if (0 == tele_period) {
-        DomoticzTempHumSensor(temperature, humidity);
-        DomoticzSensor(DZ_ILLUMINANCE, sc_value[2]);
-        DomoticzSensor(DZ_COUNT, sc_value[3]);
-        DomoticzSensor(DZ_AIRQUALITY, 500 + ((100 - sc_value[4]) * 20));
-      }
+      DomoticzTempHumSensor(temperature, humidity);
+      DomoticzSensor(DZ_ILLUMINANCE, sc_value[2]);
 #endif  // USE_DOMOTICZ
-
-#ifdef USE_KNX
-      if (0 == tele_period) {
-        KnxSensor(KNX_TEMPERATURE, t);
-        KnxSensor(KNX_HUMIDITY, h);
-      }
-#endif  // USE_KNX
-
 #ifdef USE_WEBSERVER
     } else {
       snprintf_P(mqtt_data, sizeof(mqtt_data), HTTP_SNS_TEMP, mqtt_data, "", temperature, TempUnit());
@@ -152,11 +140,13 @@ void SonoffScShow(bool json)
  * Interface
 \*********************************************************************************************/
 
-bool Xsns04(uint8_t function)
-{
-  bool result = false;
+#define XSNS_04
 
-  if (SONOFF_SC == my_module_type) {
+boolean Xsns04(byte function)
+{
+  boolean result = false;
+
+  if (SONOFF_SC == Settings.module) {
     switch (function) {
       case FUNC_INIT:
         SonoffScInit();

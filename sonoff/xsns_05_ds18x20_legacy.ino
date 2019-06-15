@@ -1,7 +1,7 @@
 /*
   xsns_05_ds18x20_legacy.ino - DS18x20 temperature sensor support for Sonoff-Tasmota
 
-  Copyright (C) 2019  Heiko Krupp and Theo Arends
+  Copyright (C) 2018  Heiko Krupp and Theo Arends
 
   This program is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
@@ -22,8 +22,6 @@
  * DS18B20 - Temperature
 \*********************************************************************************************/
 
-#define XSNS_05              5
-
 #define DS18S20_CHIPID       0x10
 #define DS18B20_CHIPID       0x28
 #define MAX31850_CHIPID      0x3B
@@ -43,12 +41,12 @@ uint8_t ds18x20_index[DS18X20_MAX_SENSORS];
 uint8_t ds18x20_sensors = 0;
 char ds18x20_types[9];
 
-void Ds18x20Init(void)
+void Ds18x20Init()
 {
   ds = new OneWire(pin[GPIO_DSB]);
 }
 
-void Ds18x20Search(void)
+void Ds18x20Search()
 {
   uint8_t num_sensors=0;
   uint8_t sensor = 0;
@@ -65,11 +63,11 @@ void Ds18x20Search(void)
       num_sensors++;
     }
   }
-  for (uint8_t i = 0; i < num_sensors; i++) {
+  for (byte i = 0; i < num_sensors; i++) {
     ds18x20_index[i] = i;
   }
-  for (uint8_t i = 0; i < num_sensors; i++) {
-    for (uint8_t j = i + 1; j < num_sensors; j++) {
+  for (byte i = 0; i < num_sensors; i++) {
+    for (byte j = i + 1; j < num_sensors; j++) {
       if (uint32_t(ds18x20_address[ds18x20_index[i]]) > uint32_t(ds18x20_address[ds18x20_index[j]])) {
         std::swap(ds18x20_index[i], ds18x20_index[j]);
       }
@@ -78,7 +76,7 @@ void Ds18x20Search(void)
   ds18x20_sensors = num_sensors;
 }
 
-uint8_t Ds18x20Sensors(void)
+uint8_t Ds18x20Sensors()
 {
   return ds18x20_sensors;
 }
@@ -87,13 +85,13 @@ String Ds18x20Addresses(uint8_t sensor)
 {
   char address[20];
 
-  for (uint8_t i = 0; i < 8; i++) {
+  for (byte i = 0; i < 8; i++) {
     sprintf(address+2*i, "%02X", ds18x20_address[ds18x20_index[sensor]][i]);
   }
   return String(address);
 }
 
-void Ds18x20Convert(void)
+void Ds18x20Convert()
 {
   ds->reset();
   ds->write(W1_SKIP_ROM);        // Address all Sensors on Bus
@@ -101,12 +99,10 @@ void Ds18x20Convert(void)
 //  delay(750);                   // 750ms should be enough for 12bit conv
 }
 
-bool Ds18x20Read(uint8_t sensor, float &t)
+boolean Ds18x20Read(uint8_t sensor, float &t)
 {
-  uint8_t data[12];
+  byte data[12];
   int8_t sign = 1;
-  uint16_t temp12 = 0;
-  int16_t temp14 = 0;
   float temp9 = 0.0;
   uint8_t present = 0;
 
@@ -116,30 +112,31 @@ bool Ds18x20Read(uint8_t sensor, float &t)
   ds->select(ds18x20_address[ds18x20_index[sensor]]);
   ds->write(W1_READ_SCRATCHPAD); // Read Scratchpad
 
-  for (uint8_t i = 0; i < 9; i++) {
+  for (byte i = 0; i < 9; i++) {
     data[i] = ds->read();
   }
   if (OneWire::crc8(data, 8) == data[8]) {
     switch(ds18x20_address[ds18x20_index[sensor]][0]) {
-    case DS18S20_CHIPID:
+    case DS18S20_CHIPID:  // DS18S20
       if (data[1] > 0x80) {
         data[0] = (~data[0]) +1;
         sign = -1;  // App-Note fix possible sign error
       }
-      temp9 = (float)(data[0] >> 1) * sign;
+      if (data[0] & 1) {
+        temp9 = ((data[0] >> 1) + 0.5) * sign;
+      } else {
+        temp9 = (data[0] >> 1) * sign;
+      }
       t = ConvertTemp((temp9 - 0.25) + ((16.0 - data[6]) / 16.0));
       break;
-    case DS18B20_CHIPID:
-      temp12 = (data[1] << 8) + data[0];
+    case DS18B20_CHIPID:   // DS18B20
+    case MAX31850_CHIPID:  // MAX31850
+      uint16_t temp12 = (data[1] << 8) + data[0];
       if (temp12 > 2047) {
         temp12 = (~temp12) +1;
         sign = -1;
       }
-      t = ConvertTemp(sign * temp12 * 0.0625);  // Divide by 16
-      break;
-    case MAX31850_CHIPID:
-        temp14 = (data[1] << 8) + (data[0] & 0xFC);
-        t = ConvertTemp(temp14 * 0.0625);  // Divide by 16
+      t = ConvertTemp(sign * temp12 * 0.0625);
       break;
     }
   }
@@ -164,16 +161,16 @@ void Ds18x20Type(uint8_t sensor)
   }
 }
 
-void Ds18x20Show(bool json)
+void Ds18x20Show(boolean json)
 {
+  char temperature[10];
   char stemp[10];
   float t;
 
-  uint8_t dsxflg = 0;
-  for (uint8_t i = 0; i < Ds18x20Sensors(); i++) {
+  byte dsxflg = 0;
+  for (byte i = 0; i < Ds18x20Sensors(); i++) {
     if (Ds18x20Read(i, t)) {           // Check if read failed
       Ds18x20Type(i);
-      char temperature[33];
       dtostrfd(t, Settings.flag2.temperature_resolution, temperature);
 
       if (json) {
@@ -184,17 +181,12 @@ void Ds18x20Show(bool json)
         dsxflg++;
         snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s%s\"DS%d\":{\"" D_JSON_TYPE "\":\"%s\",\"" D_JSON_ADDRESS "\":\"%s\",\"" D_JSON_TEMPERATURE "\":%s}"),
           mqtt_data, stemp, i +1, ds18x20_types, Ds18x20Addresses(i).c_str(), temperature);
-        strlcpy(stemp, ",", sizeof(stemp));
+        strcpy(stemp, ",");
 #ifdef USE_DOMOTICZ
-        if ((0 == tele_period) && (1 == dsxflg)) {
+        if (1 == dsxflg) {
           DomoticzSensor(DZ_TEMP, temperature);
         }
 #endif  // USE_DOMOTICZ
-#ifdef USE_KNX
-        if ((0 == tele_period) && (1 == dsxflg)) {
-          KnxSensor(KNX_TEMPERATURE, t);
-        }
-#endif  // USE_KNX
 #ifdef USE_WEBSERVER
       } else {
         snprintf_P(stemp, sizeof(stemp), PSTR("%s-%d"), ds18x20_types, i +1);
@@ -207,18 +199,23 @@ void Ds18x20Show(bool json)
     if (dsxflg) {
       snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s}"), mqtt_data);
     }
+#ifdef USE_WEBSERVER
+  } else {
+    Ds18x20Search();      // Check for changes in sensors number
+    Ds18x20Convert();     // Start Conversion, takes up to one second
+#endif  // USE_WEBSERVER
   }
-  Ds18x20Search();      // Check for changes in sensors number
-  Ds18x20Convert();     // Start Conversion, takes up to one second
 }
 
 /*********************************************************************************************\
  * Interface
 \*********************************************************************************************/
 
-bool Xsns05(uint8_t function)
+#define XSNS_05
+
+boolean Xsns05(byte function)
 {
-  bool result = false;
+  boolean result = false;
 
   if (pin[GPIO_DSB] < 99) {
     switch (function) {
